@@ -49,24 +49,27 @@ exports.getDetailedReport = async (req, res) => {
 
         if (period) {
             const now = new Date();
-            let startDate;
+            let startDate = new Date(now); // copy to avoid mutating now
 
             switch (period) {
                 case 'week':
-                    startDate = new Date(now.setDate(now.getDate() - 7));
+                    startDate.setDate(startDate.getDate() - 7);
                     break;
                 case 'month':
-                    startDate = new Date(now.setDate(now.getDate() - 30));
+                    startDate.setDate(startDate.getDate() - 30);
                     break;
                 case 'year':
-                    startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+                    startDate.setFullYear(startDate.getFullYear() - 1);
                     break;
                 default:
                     startDate = new Date(0); // All time
             }
 
+            // SQLite stores created_at as "YYYY-MM-DD HH:MM:SS". Format to match for string comparison.
+            const startDateSql = startDate.toISOString().slice(0, 19).replace('T', ' ');
+
             salesQuery += ' AND s.created_at >= ?';
-            params.push(startDate.toISOString());
+            params.push(startDateSql);
         }
 
         const [sales] = await db.query(salesQuery, params);
