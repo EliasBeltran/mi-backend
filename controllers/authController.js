@@ -1,6 +1,7 @@
 const db = require('../config/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { logAudit } = require('../utils/audit');
 
 exports.register = async (req, res) => {
     const { username, password, role } = req.body;
@@ -60,15 +61,12 @@ exports.login = async (req, res) => {
             { expiresIn: '24h' }
         );
 
-        // Create audit log for login (non-blocking)
-        try {
-            await db.query(
-                'INSERT INTO audit_logs (user_id, action, module, details, ip_address) VALUES (?, ?, ?, ?, ?)',
-                [user.id, 'LOGIN', 'auth', JSON.stringify({ username: user.username, role: user.role }), 'system']
-            );
-        } catch (auditError) {
-            console.error('Audit log error (non-blocking):', auditError.message);
-        }
+        await logAudit(req, {
+            userId: user.id,
+            action: 'LOGIN',
+            module: 'auth',
+            details: { username: user.username, role: user.role }
+        });
 
         res.json({
             token,

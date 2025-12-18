@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { toCents, fromCents, mapMoneyFields } = require('../utils/money');
 
 exports.createSale = async (req, res) => {
     const { user_id, items, payment_method, qr_reference, customer_name, customer_ci, customer_phone, credit_due_date, is_paid } = req.body;
@@ -24,11 +25,12 @@ exports.createSale = async (req, res) => {
             }
         }
 
-        const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        const totalCents = items.reduce((sum, item) => sum + (toCents(item.price) * item.quantity), 0);
+        const totalBs = fromCents(totalCents);
 
         const [result] = await db.query(
             'INSERT INTO sales (user_id, total, payment_method, qr_reference, customer_name, customer_ci, customer_phone, credit_due_date, is_paid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [user_id, total, payment_method || 'cash', qr_reference, customer_name, customer_ci, customer_phone, credit_due_date, is_paid !== false]
+            [user_id, totalCents, payment_method || 'cash', qr_reference, customer_name, customer_ci, customer_phone, credit_due_date, is_paid !== false]
         );
 
         const saleId = result.lastID;
@@ -48,7 +50,7 @@ exports.createSale = async (req, res) => {
 
             await db.query(
                 'INSERT INTO cash_movements (cash_register_id, type, category, amount, description, reference_id) VALUES (?, ?, ?, ?, ?, ?)',
-                [activeRegister[0].id, 'sale', payment_method, total, description, saleId]
+                [activeRegister[0].id, 'sale', payment_method, totalCents, description, saleId]
             );
         }
 
@@ -56,7 +58,7 @@ exports.createSale = async (req, res) => {
         for (const item of items) {
             await db.query(
                 'INSERT INTO sale_items (sale_id, product_id, quantity, price) VALUES (?, ?, ?, ?)',
-                [saleId, item.product_id, item.quantity, item.price]
+                [saleId, item.product_id, item.quantity, toCents(item.price)]
             );
 
             // Decrease stock
@@ -100,7 +102,7 @@ exports.createSale = async (req, res) => {
         if (payment_method === 'credit') {
             await db.query(
                 'INSERT INTO accounts_receivable (sale_id, customer_name, amount, due_date, paid_amount, status) VALUES (?, ?, ?, ?, ?, ?)',
-                [saleId, customer_name || 'Cliente', total, credit_due_date, 0, 'pending']
+                [saleId, customer_name || 'Cliente', totalCents, credit_due_date, 0, 'pending']
             );
         }
 
@@ -108,13 +110,13 @@ exports.createSale = async (req, res) => {
         try {
             await db.query(
                 'INSERT INTO audit_logs (user_id, action, module, details, ip_address) VALUES (?, ?, ?, ?, ?)',
-                [user_id, 'CREATE_SALE', 'sales', JSON.stringify({ sale_id: saleId, total, items: items.length, payment_method }), 'system']
+                [user_id, 'CREATE_SALE', 'sales', JSON.stringify({ sale_id: saleId, total: totalBs, items: items.length, payment_method }), 'system']
             );
 
             // Create notification for the sale
             await db.query(
                 'INSERT INTO notifications_history (type, title, message, icon, color, action, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                ['success', 'Nueva Venta', `Venta #${saleId} por Bs ${total.toFixed(2)} - ${customer_name || 'Cliente General'}`, 'ShoppingCart', 'green', 'Ver detalles', user_id]
+                ['success', 'Nueva Venta', `Venta #${saleId} por Bs ${totalBs.toFixed(2)} - ${customer_name || 'Cliente General'}`, 'ShoppingCart', 'green', 'Ver detalles', user_id]
             );
         } catch (auditError) {
             console.error('Audit/Notification error (non-blocking):', auditError.message);
@@ -123,7 +125,7 @@ exports.createSale = async (req, res) => {
         res.status(201).json({
             message: 'Venta registrada exitosamente',
             id: saleId,
-            total: total
+            total: totalBs
         });
     } catch (error) {
         console.error(error);
@@ -140,7 +142,8 @@ exports.getAllSales = async (req, res) => {
       ORDER BY s.created_at DESC
       LIMIT 100
     `);
-        res.json(sales);
+        const normalized = sales.map((sale) => mapMoneyFields(sale, ['total']));
+        res.json(normalized);
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
     }
@@ -167,7 +170,10 @@ exports.getSaleDetails = async (req, res) => {
       WHERE si.sale_id = ?
     `, [id]);
 
-        res.json({ ...sale[0], items });
+        const saleOut = mapMoneyFields(sale[0], ['total']);
+        const itemsOut = items.map((item) => mapMoneyFields(item, ['price']));
+
+        res.json({ ...saleOut, items: itemsOut });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error' });

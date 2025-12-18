@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { logAudit } = require('../utils/audit');
 
 exports.getAllCategories = async (req, res) => {
     try {
@@ -17,6 +18,12 @@ exports.createCategory = async (req, res) => {
             'INSERT INTO categories (name, description) VALUES (?, ?)',
             [name, description]
         );
+        await logAudit(req, {
+            action: 'CREATE_CATEGORY',
+            module: 'categories',
+            details: { id: result.lastID, name }
+        });
+
         res.status(201).json({ message: 'Category created', id: result.lastID });
     } catch (error) {
         console.error(error);
@@ -35,6 +42,12 @@ exports.updateCategory = async (req, res) => {
             'UPDATE categories SET name = ?, description = ? WHERE id = ?',
             [name, description, id]
         );
+        await logAudit(req, {
+            action: 'UPDATE_CATEGORY',
+            module: 'categories',
+            details: { id: Number(id), name }
+        });
+
         res.json({ message: 'Category updated' });
     } catch (error) {
         console.error(error);
@@ -52,6 +65,13 @@ exports.deleteCategory = async (req, res) => {
         }
 
         await db.query('DELETE FROM categories WHERE id = ?', [id]);
+
+        await logAudit(req, {
+            action: 'DELETE_CATEGORY',
+            module: 'categories',
+            details: { id: Number(id) }
+        });
+
         res.json({ message: 'Category deleted' });
     } catch (error) {
         console.error(error);

@@ -4,6 +4,12 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 
+const toCents = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 0;
+    return Math.round(num * 100);
+};
+
 const seed = async () => {
     try {
         const db = await open({
@@ -117,9 +123,11 @@ const seed = async () => {
 
         for (const product of products) {
             const profitMargin = ((product.price - product.cost) / product.cost * 100).toFixed(2);
+            const priceCents = toCents(product.price);
+            const costCents = toCents(product.cost);
             await db.run(
                 'INSERT INTO products (name, description, price, cost_price, profit_margin, stock, category_id, min_stock) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                [product.name, product.description, product.price, product.cost, profitMargin, product.stock, product.category_id, product.min_stock]
+                [product.name, product.description, priceCents, costCents, profitMargin, product.stock, product.category_id, product.min_stock]
             );
         }
 

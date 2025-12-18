@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { toCents, fromCents, mapMoneyFields } = require('../utils/money');
 
 exports.createCashCount = async (req, res) => {
     const { user_id, type, denominations, description } = req.body;
@@ -11,7 +12,7 @@ exports.createCashCount = async (req, res) => {
         // Calculate actual amount from denominations
         let actual_amount = 0;
         if (denominations && denominations.length > 0) {
-            actual_amount = denominations.reduce((sum, d) => sum + d.total, 0);
+            actual_amount = denominations.reduce((sum, d) => sum + toCents(d.total), 0);
         }
 
         // Get expected amount (from sales if closing)
@@ -41,7 +42,7 @@ exports.createCashCount = async (req, res) => {
             for (const denom of denominations) {
                 await db.query(
                     'INSERT INTO cash_denominations (cash_count_id, type, denomination, quantity, total) VALUES (?, ?, ?, ?, ?)',
-                    [cashCountId, denom.type, denom.denomination, denom.quantity, denom.total]
+                    [cashCountId, denom.type, denom.denomination, denom.quantity, toCents(denom.total)]
                 );
             }
         }
@@ -59,7 +60,7 @@ exports.createCashCount = async (req, res) => {
 
             await db.query(
                 'INSERT INTO notifications_history (type, title, message, icon, color, action, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                ['info', notifTitle, `${notifTitle} registrada por Bs ${actual_amount.toFixed(2)}`, notifIcon, notifColor, 'Ver historial', user_id]
+                ['info', notifTitle, `${notifTitle} registrada por Bs ${fromCents(actual_amount).toFixed(2)}`, notifIcon, notifColor, 'Ver historial', user_id]
             );
         } catch (notifError) {
             console.error('Notification error:', notifError.message);
@@ -68,9 +69,9 @@ exports.createCashCount = async (req, res) => {
         res.status(201).json({
             message: 'Arqueo registrado',
             id: cashCountId,
-            expected_amount,
-            actual_amount,
-            difference
+            expected_amount: fromCents(expected_amount),
+            actual_amount: fromCents(actual_amount),
+            difference: fromCents(difference)
         });
     } catch (error) {
         console.error(error);
@@ -86,7 +87,8 @@ exports.getCashCounts = async (req, res) => {
       LEFT JOIN users u ON c.user_id = u.id 
       ORDER BY c.created_at DESC
     `);
-        res.json(counts);
+        const normalized = counts.map((count) => mapMoneyFields(count, ['expected_amount', 'actual_amount', 'difference']));
+        res.json(normalized);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error' });
@@ -107,7 +109,10 @@ exports.getCashCountDetails = async (req, res) => {
             [id]
         );
 
-        res.json({ ...count[0], denominations });
+        const countOut = mapMoneyFields(count[0], ['expected_amount', 'actual_amount', 'difference']);
+        const denomsOut = denominations.map((denom) => mapMoneyFields(denom, ['total']));
+
+        res.json({ ...countOut, denominations: denomsOut });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error' });

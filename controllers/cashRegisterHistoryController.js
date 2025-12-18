@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { toCents, mapMoneyFields } = require('../utils/money');
 
 // Save closed cash register session
 exports.saveCashRegisterHistory = async (req, res) => {
@@ -19,14 +20,24 @@ exports.saveCashRegisterHistory = async (req, res) => {
 
     const user_id = req.user.id;
 
+    const openingBalanceCents = toCents(opening_balance);
+    const closingBalanceCents = toCents(closing_balance);
+    const expectedBalanceCents = toCents(expected_balance);
+    const differenceCents = toCents(difference);
+    const totalSalesCents = toCents(total_sales);
+    const cashSalesCents = toCents(cash_sales);
+    const qrSalesCents = toCents(qr_sales);
+    const creditSalesCents = toCents(credit_sales);
+    const expensesCents = toCents(expenses);
+
     try {
         const result = await db.query(
             `INSERT INTO cash_register_history 
             (user_id, shift_type, opening_balance, closing_balance, expected_balance, 
             difference, total_sales, cash_sales, qr_sales, credit_sales, expenses, notes, opened_at) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [user_id, shift_type, opening_balance, closing_balance, expected_balance,
-                difference, total_sales, cash_sales, qr_sales, credit_sales, expenses, notes, opened_at]
+            [user_id, shift_type, openingBalanceCents, closingBalanceCents, expectedBalanceCents,
+                differenceCents, totalSalesCents, cashSalesCents, qrSalesCents, creditSalesCents, expensesCents, notes, opened_at]
         );
 
         res.json({
@@ -81,7 +92,8 @@ exports.getCashRegisterHistory = async (req, res) => {
         query += ` ORDER BY cr.closing_time DESC`;
 
         const [history] = await db.query(query, params);
-        res.json(history);
+        const normalized = history.map((row) => mapMoneyFields(row, ['opening_balance', 'closing_balance', 'expected_balance', 'difference']));
+        res.json(normalized);
     } catch (error) {
         console.error('Error fetching cash register history:', error);
         res.status(500).json({ message: 'Error al obtener el historial' });
@@ -105,7 +117,18 @@ exports.getCashRegisterById = async (req, res) => {
             return res.status(404).json({ message: 'Arqueo no encontrado' });
         }
 
-        res.json(sessions[0]);
+        const normalized = mapMoneyFields(sessions[0], [
+            'opening_balance',
+            'closing_balance',
+            'expected_balance',
+            'difference',
+            'total_sales',
+            'cash_sales',
+            'qr_sales',
+            'credit_sales',
+            'expenses'
+        ]);
+        res.json(normalized);
     } catch (error) {
         console.error('Error fetching cash register session:', error);
         res.status(500).json({ message: 'Error al obtener el arqueo' });

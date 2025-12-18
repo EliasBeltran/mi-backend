@@ -1,12 +1,13 @@
 const db = require('../config/db');
+const { fromCents, mapMoneyFields } = require('../utils/money');
 
 exports.getDashboardStats = async (req, res) => {
     try {
         // Total Sales
-        const [totalSalesResult] = await db.query('SELECT SUM(total) as total FROM sales');
-        const totalSales = totalSalesResult[0].total || 0;
+        const [totalSalesResult] = await db.query('SELECT COALESCE(SUM(total), 0) as total FROM sales');
+        const totalSalesCents = totalSalesResult[0].total || 0;
 
-        // Total Orders
+        // Total Orders / Transactions
         const [totalOrdersResult] = await db.query('SELECT COUNT(*) as count FROM sales');
         const totalOrders = totalOrdersResult[0].count || 0;
 
@@ -14,20 +15,28 @@ exports.getDashboardStats = async (req, res) => {
         const [totalProductsResult] = await db.query('SELECT COUNT(*) as count FROM products');
         const totalProducts = totalProductsResult[0].count || 0;
 
+        // Sales today (using SQLite date functions; defaults to localtime)
+        const [salesTodayResult] = await db.query(
+            "SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE date(created_at) = date('now','localtime')"
+        );
+        const salesTodayCents = salesTodayResult[0].total || 0;
+
         // Recent Sales
         const [recentSales] = await db.query(`
-      SELECT s.id, s.total, s.created_at, u.username 
-      FROM sales s 
-      LEFT JOIN users u ON s.user_id = u.id 
-      ORDER BY s.created_at DESC 
-      LIMIT 5
-    `);
+            SELECT s.id, s.total, s.created_at, u.username 
+            FROM sales s 
+            LEFT JOIN users u ON s.user_id = u.id 
+            ORDER BY s.created_at DESC 
+            LIMIT 5
+        `);
+        const recentSalesOut = recentSales.map((sale) => mapMoneyFields(sale, ['total']));
 
         res.json({
-            totalSales,
+            totalSales: fromCents(totalSalesCents),
             totalOrders,
             totalProducts,
-            recentSales
+            salesToday: fromCents(salesTodayCents),
+            recentSales: recentSalesOut
         });
     } catch (error) {
         console.error(error);
@@ -48,35 +57,29 @@ exports.getDetailedReport = async (req, res) => {
         }
 
         if (period) {
-            const now = new Date();
-            let startDate = new Date(now); // copy to avoid mutating now
-
+            // Use SQLite date arithmetic to avoid timezone/format mismatches
             switch (period) {
                 case 'week':
-                    startDate.setDate(startDate.getDate() - 7);
+                    salesQuery += " AND date(s.created_at) >= date('now','-7 days','localtime')";
                     break;
                 case 'month':
-                    startDate.setDate(startDate.getDate() - 30);
+                    salesQuery += " AND date(s.created_at) >= date('now','-30 days','localtime')";
                     break;
                 case 'year':
-                    startDate.setFullYear(startDate.getFullYear() - 1);
+                    salesQuery += " AND date(s.created_at) >= date('now','-1 year','localtime')";
                     break;
                 default:
-                    startDate = new Date(0); // All time
+                    // All time: no filter
+                    break;
             }
-
-            // SQLite stores created_at as "YYYY-MM-DD HH:MM:SS". Format to match for string comparison.
-            const startDateSql = startDate.toISOString().slice(0, 19).replace('T', ' ');
-
-            salesQuery += ' AND s.created_at >= ?';
-            params.push(startDateSql);
         }
 
         const [sales] = await db.query(salesQuery, params);
 
         // Calculate metrics
-        const totalSales = sales.reduce((sum, s) => sum + s.total, 0);
-        const avgSale = sales.length > 0 ? totalSales / sales.length : 0;
+        const totalSalesCents = sales.reduce((sum, s) => sum + s.total, 0);
+        const avgSaleCents = sales.length > 0 ? totalSalesCents / sales.length : 0;
+        const salesOut = sales.map((sale) => mapMoneyFields(sale, ['total']));
 
         // Get top products for this report
         // Note: This requires parsing the items JSON or having a separate sales_items table
@@ -85,10 +88,10 @@ exports.getDetailedReport = async (req, res) => {
         res.json({
             period,
             userId,
-            totalSales,
+            totalSales: fromCents(totalSalesCents),
             salesCount: sales.length,
-            avgSale,
-            sales
+            avgSale: fromCents(avgSaleCents),
+            sales: salesOut
         });
     } catch (error) {
         console.error(error);

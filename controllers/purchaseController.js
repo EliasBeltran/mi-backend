@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { toCents, fromCents, mapMoneyFields } = require('../utils/money');
 
 // Función para calcular similitud entre strings (Levenshtein simplificado)
 function calculateSimilarity(str1, str2) {
@@ -63,7 +64,8 @@ exports.searchSimilarProducts = async (req, res) => {
             .sort((a, b) => b.similarity - a.similarity)
             .slice(0, 5); // Top 5 resultados
 
-        res.json(similarProducts);
+        const normalized = similarProducts.map((product) => mapMoneyFields(product, ['price', 'cost_price']));
+        res.json(normalized);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Error al buscar productos' });
@@ -96,8 +98,10 @@ exports.createPurchase = async (req, res) => {
 
     try {
         // Calcular precio de venta
-        const selling_price = cost_price + (cost_price * profit_margin / 100);
-        const total_cost = cost_price * quantity;
+        const costPriceCents = toCents(cost_price);
+        const sellingPriceCents = Math.round(costPriceCents * (1 + (Number(profit_margin) / 100)));
+        const totalCostCents = costPriceCents * Number(quantity);
+        const totalCostBs = fromCents(totalCostCents);
 
         let finalProductId = product_id;
 
@@ -105,28 +109,28 @@ exports.createPurchase = async (req, res) => {
         if (is_new_product) {
             const [result] = await db.query(
                 'INSERT INTO products (name, price, cost_price, profit_margin, stock, category_id, last_purchase_date) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-                [product_name, selling_price, cost_price, profit_margin, quantity, category_id]
+                [product_name, sellingPriceCents, costPriceCents, profit_margin, quantity, category_id]
             );
             finalProductId = result.lastID;
         } else {
             // Actualizar producto existente
             await db.query(
                 'UPDATE products SET stock = stock + ?, cost_price = ?, price = ?, profit_margin = ?, last_purchase_date = CURRENT_TIMESTAMP WHERE id = ?',
-                [quantity, cost_price, selling_price, profit_margin, finalProductId]
+                [quantity, costPriceCents, sellingPriceCents, profit_margin, finalProductId]
             );
         }
 
         // Registrar la compra
         const [purchaseResult] = await db.query(
             'INSERT INTO purchases (product_id, product_name, supplier_name, quantity, cost_price, selling_price, profit_margin, total_cost, is_new_product, category_id, user_id, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [finalProductId, product_name, supplier_name, quantity, cost_price, selling_price, profit_margin, total_cost, is_new_product ? 1 : 0, category_id, user_id, payment_method || 'cash']
+            [finalProductId, product_name, supplier_name, quantity, costPriceCents, sellingPriceCents, profit_margin, totalCostCents, is_new_product ? 1 : 0, category_id, user_id, payment_method || 'cash']
         );
 
         // Si es compra a crédito, crear cuenta por pagar
         if (payment_method === 'credit') {
             await db.query(
                 'INSERT INTO accounts_payable (supplier_name, description, amount, due_date, paid_amount, status) VALUES (?, ?, ?, ?, ?, ?)',
-                [supplier_name, `Compra de ${quantity} ${product_name}`, total_cost, due_date, 0, 'pending']
+                [supplier_name, `Compra de ${quantity} ${product_name}`, totalCostCents, due_date, 0, 'pending']
             );
         }
 
@@ -134,13 +138,13 @@ exports.createPurchase = async (req, res) => {
         try {
             await db.query(
                 'INSERT INTO audit_logs (user_id, action, module, details, ip_address) VALUES (?, ?, ?, ?, ?)',
-                [user_id, 'CREATE_PURCHASE', 'purchases', JSON.stringify({ product_name, quantity, total_cost, payment_method }), 'system']
+                [user_id, 'CREATE_PURCHASE', 'purchases', JSON.stringify({ product_name, quantity, total_cost: totalCostBs, payment_method }), 'system']
             );
 
             // Create notification for the purchase
             await db.query(
                 'INSERT INTO notifications_history (type, title, message, icon, color, action, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                ['info', 'Nueva Compra', `Compra de ${quantity} ${product_name} por Bs ${total_cost.toFixed(2)}`, 'ShoppingBag', 'blue', 'Ver inventario', user_id]
+                ['info', 'Nueva Compra', `Compra de ${quantity} ${product_name} por Bs ${totalCostBs.toFixed(2)}`, 'ShoppingBag', 'blue', 'Ver inventario', user_id]
             );
         } catch (auditError) {
             console.error('Audit/Notification error:', auditError.message);
@@ -168,7 +172,8 @@ exports.getAllPurchases = async (req, res) => {
             ORDER BY p.created_at DESC
             LIMIT 100
         `);
-        res.json(purchases);
+        const normalized = purchases.map((purchase) => mapMoneyFields(purchase, ['cost_price', 'selling_price', 'total_cost']));
+        res.json(normalized);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Error al obtener compras' });
@@ -188,10 +193,12 @@ exports.getPurchaseStats = async (req, res) => {
             LIMIT 5
         `);
 
+        const topProductsOut = topProducts.map((item) => mapMoneyFields(item, ['total_invested']));
+
         res.json({
-            total_invested: totalInvested[0].total || 0,
+            total_invested: fromCents(totalInvested[0].total || 0),
             total_purchases: totalPurchases[0].count || 0,
-            top_products: topProducts
+            top_products: topProductsOut
         });
     } catch (error) {
         console.error(error);
